@@ -8,3 +8,5 @@ async function blacklistCheck(url) {
 }
 
 module.exports = blacklistCheck;
+//usman sun, apna program local files i.e blacklist files me dhundega, lekin unn files ko update karne ke liye kuch code karna padega
+//pehle sirf files ko integrate karke try kar, phir file update ka dekhte
