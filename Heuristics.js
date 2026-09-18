@@ -9,8 +9,6 @@ async function heuristicsCheck(cleanUrl)
         let riskScore = 0;
         let warnings = [];
 
-        
-        
         // 1. Raw IP address check
         const ipRegex = /^(\d{1,3}\.){3}\d{1,3}$/;
         if (ipRegex.test(hostname)) 
@@ -79,6 +77,43 @@ async function heuristicsCheck(cleanUrl)
             warnings.push('Contains double encoding or directory traversal sequences');
         }
 
+        // --- NEW ADDED RULES ---
+
+        // 10. Non-standard / suspicious port check
+        if (parsedUrl.port && !['80', '443', '8080', '8443'].includes(parsedUrl.port)) 
+        {
+            riskScore += 25;
+            warnings.push('Uses a non-standard or potentially risky port');
+        }
+
+        // 11. Punycode / IDN homograph attack check
+        if (hostname && hostname.startsWith('xn--')) 
+        {
+            riskScore += 35;
+            warnings.push('Uses Punycode (potential IDN homograph spoofing attack)');
+        }
+
+        // 12. Excessive slashes / deep directory path nesting
+        const slashCount = (parsedUrl.pathname.match(/\//g) || []).length;
+        if (slashCount > 5) 
+        {
+            riskScore += 20;
+            warnings.push('Excessive directory nesting in URL path');
+        }
+
+        // 13. High-entropy or random uppercase path segment check (e.g. 73321ALNWYY)
+        const pathSegments = parsedUrl.pathname.split('/').filter(Boolean);
+        const hasRandomLookingSegment = pathSegments.some(segment => 
+            segment.length > 8 && /[A-Z]/.test(segment) && /\d/.test(segment)
+        );
+        if (hasRandomLookingSegment) 
+        {
+            riskScore += 30;
+            warnings.push('Contains suspicious alphanumeric/randomized path segment');
+        }
+
+        // -----------------------
+
         return {
             working: true,
             url: cleanUrl,
@@ -92,6 +127,7 @@ async function heuristicsCheck(cleanUrl)
     {
         return {
             working: true,
+            url: cleanUrl,
             error: 'Failed to run heuristics check.'
         };
     }
