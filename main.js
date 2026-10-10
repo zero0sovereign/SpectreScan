@@ -112,16 +112,19 @@ const HANDLERS =
         {
             print('bad', `${pad('Threat lists')}: exact URL match in ${d.exactSources.join(', ')}`);
         }
+       
         if (d.domainSources && d.domainSources.length) 
         {
             print(d.matchType === 'Exact URL' ? 'bad' : 'warn',
                 `${pad('Threat lists')}: host/domain listed in ${d.domainSources.join(', ')}`);
         }
+       
         if (d.matchType === 'None') 
         {
             print('good', `${pad('Threat lists')}: not listed in ${d.sourcesLoaded} lists ` +
                 `(${d.totalUrlsLoaded.toLocaleString()} entries checked)`);
         }
+       
         if (d.sourcesLoaded < d.sourcesTotal) 
         {
             print('warn', `${pad('Threat lists')}: ${d.sourcesTotal - d.sourcesLoaded} list(s) not available right now`);
@@ -134,10 +137,12 @@ const HANDLERS =
         {
             print('warn', `${pad('SafeBrowse')}: lookup ${d.error}`);
         } 
+       
         else if (d.matched) 
         {
             print('bad', `${pad('SafeBrowse')}: flagged by Google (${d.threats.join(', ')})`);
         } 
+        
         else 
         {
             print('good', `${pad('SafeBrowse')}: no match in Google Safe Browsing`);
@@ -198,7 +203,8 @@ const HANDLERS =
         print('none', `${pad('Activity')}: ${s.requests || 0} requests, ${s.redirects || 0} redirects, ` +
             `${s.frames || 0} frames, ${s.popups || 0} popups, ${s.downloads || 0} downloads`);
 
-        for (const f of d.findings || []) {
+        for (const f of d.findings || []) 
+        {
             const k = f.severity === 'high' ? 'bad' : f.severity === 'medium' ? 'warn' : 'none';
             print(k, `${' '.repeat(12)}  - [${f.severity}] ${f.type}: ${f.details}`);
         }
@@ -318,6 +324,7 @@ async function runScan(rawInput)
             print('bad', 'Server is busy right now. Please try again in a few seconds.');
             return;
         }
+        
         if (!res.ok && res.status !== 202) 
         {
             print('bad', body.error || `Request failed (HTTP ${res.status})`);
@@ -325,14 +332,18 @@ async function runScan(rawInput)
         }
 
         print('info', `${pad('Target')}: ${body.target}`);
+       
         if (body.deduped) print('info', 'Reusing an identical scan from the last few minutes');
 
         await streamEvents(body.jobId);
     } 
+    
     catch (error) 
     {
         print('bad', `Request failed: ${error.message}`);
-    } finally 
+    } 
+    
+    finally 
     {
         currentSpinner.stop();
         currentSpinner = null;
@@ -361,6 +372,7 @@ document.addEventListener('DOMContentLoaded', () => {
         {
             await runScan(inputUrl);
         } 
+        
         finally 
         {
             submitBtn.disabled = false;
