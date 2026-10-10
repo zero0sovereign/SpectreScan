@@ -1,37 +1,61 @@
-console.log("VM SANDBOX module is working");
+const VM_URL = process.env.VM_URL || 'http://localhost:4000/scan';
+const HARD_TIMEOUT_MS = Number(process.env.VM_TIMEOUT_MS || 12_000); // VM kills scans at 8 s
+const MAX_FINDINGS = 40;
+const MAX_EVIDENCE_CHARS = 1500;
 
-async function vmSandboxCheck(url) {
-    const TARGET_VM_URL = 'http://localhost:4000/scan';
+function trimFinding(f) 
+{
+    const out = { type: f.type, severity: f.severity, score: f.score, details: f.details };
 
-    try {
-        console.log("----------------------------------------");
-        console.log("[Host] ---> BEFORE sending request to VM API...");
-        
-        const response = await fetch(TARGET_VM_URL, {
+    if (f.evidence != null) 
+    {
+        const text = JSON.stringify(f.evidence);
+        if (text.length <= MAX_EVIDENCE_CHARS) out.evidence = f.evidence;
+        else out.evidenceTruncated = true;
+    }
+    return out;
+}
+
+async function vmSandboxCheck(url) 
+{
+    try 
+    {
+        const response = await fetch(VM_URL, 
+        {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ targetUrl: url })
+            body: JSON.stringify({ targetUrl: url }),
+            signal: AbortSignal.timeout(HARD_TIMEOUT_MS)
         });
 
+        if (!response.ok) 
+        {
+            throw new Error(`VM responded with HTTP ${response.status}`);
+        }
+
         const data = await response.json();
-        
-        console.log("[Host] <--- AFTER receiving response from VM API:");
-        console.log(JSON.stringify(data, null, 2));
-        console.log("----------------------------------------");
+        const r = data.result || {};
 
-        // Return the actual data received from the VM back to your server
         return {
-            working: true,
-            url: url,
-            vmResult: data
+            working: r.success !== false,
+            url,
+            finalUrl: r.finalUrl || url,
+            suspicionScore: r.suspicionScore ?? 0,
+            riskLevel: r.riskLevel || 'unknown',
+            findings: (r.findings || []).slice(0, MAX_FINDINGS).map(trimFinding),
+            statistics: r.statistics || {},
+            navigationError: r.navigationError || null,
+            timedOut: Boolean(r.timedOut),
+            error: r.error
         };
-
-    } catch (error) {
-        console.error('[Host] Error communicating with VM:', error.message);
+    } 
+    
+    catch (error) 
+    {
         return {
             working: false,
-            url: url,
-            error: error.message
+            url,
+            error: error.name === 'TimeoutError' ? 'VM scan timed out' : error.message
         };
     }
 }
