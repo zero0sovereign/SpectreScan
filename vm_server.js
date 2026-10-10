@@ -1,42 +1,35 @@
-// vm_server.js
-//
-// VM-only behavioral website scanner.
-//
-// Flow:
-//   Host -> POST /scan
-//        -> bounded queue
-//        -> 4 parallel workers
-//        -> Playwright/Chromium
-//        -> behavioral analysis
-//        -> suspicion score + findings
-//        -> JSON response to Host
-//
 // Install:
 //   npm install express playwright
 //   npx playwright install chromium
-//
-// IMPORTANT:
-// The VM/container/network isolation is the actual security boundary.
-// Do not expose this scanner directly to the public Internet.
 
 const express = require("express");
 const { chromium } = require("playwright");
+const os = require("os");
 
 const app = express();
 
 app.use(express.json({ limit: "16kb" }));
 
-// ============================================================
-// CONFIG
-// ============================================================
+//CONFIGURATION
+// Everything below can be overridden with environment variables.
+const PORT = Number(process.env.PORT || 3000);   // host's VM_Check.js calls :4000. This is done using port forwading in VM settings where host_port: 4000, guest_port:
 
-const PORT = 3000;
+// Sized for a VM where Chromium may use ~1-1.5 GB:
+// 3 pages at once ~ 3 x 150-300 MB + ~120 MB browser process.
+const WORKER_COUNT = Number(process.env.WORKERS || 3);
+const MAX_QUEUE_SIZE = Number(process.env.MAX_QUEUE || 10);
 
-const WORKER_COUNT = 4;
-const MAX_QUEUE_SIZE = 50;
+const NAVIGATION_TIMEOUT = Number(process.env.NAV_TIMEOUT || 3_000);
+const OBSERVATION_TIME = Number(process.env.OBSERVE_MS || 1_500); // max settle wait
+const MIN_OBSERVATION = 800;    // always watch at least this long
+const HARD_DEADLINE = Number(process.env.HARD_DEADLINE || 8_000); // kill a scan after this
 
-const NAVIGATION_TIMEOUT = 15_000;
-const OBSERVATION_TIME = 5_000;
+// "context" = one shared Chromium, isolated context per scan (fast, low RAM)
+// "browser" = new Chromium per scan (slowest, strongest isolation)
+const ISOLATION = process.env.ISOLATION === "browser" ? "browser" : "context";
+const RECYCLE_AFTER = Number(process.env.RECYCLE_AFTER || 150); // restart Chromium after N scans
+const MIN_FREE_MB = Number(process.env.MIN_FREE_MB || 150);     // wait if the VM is this low on RAM
+const BLOCK_HEAVY = process.env.BLOCK_HEAVY !== "0";            // skip images/media/fonts
 
 const MAX_REQUESTS = 1000;
 const MAX_RESPONSES = 1000;
@@ -49,27 +42,29 @@ const MAX_PAGE_ERRORS = 100;
 
 const MAX_SCORE = 100;
 
-// ============================================================
 // QUEUE
-// ============================================================
-
 const scanQueue = [];
+const waiters = [];   // idle workers waiting for a job
 
 let jobCounter = 0;
 
-function createJobId() {
+function createJobId() 
+{
     jobCounter += 1;
     return `${Date.now()}-${jobCounter}`;
 }
 
-function enqueue(targetUrl) {
+function enqueue(targetUrl) 
+{
     return new Promise((resolve, reject) => {
-        if (scanQueue.length >= MAX_QUEUE_SIZE) {
+        if (scanQueue.length >= MAX_QUEUE_SIZE) 
+        {
             reject(new Error("Scan queue is full"));
             return;
         }
 
-        const job = {
+        const job = 
+        {
             id: createJobId(),
             targetUrl,
             createdAt: Date.now(),
@@ -77,63 +72,91 @@ function enqueue(targetUrl) {
             reject
         };
 
-        scanQueue.push(job);
+        // hand the job straight to an idle worker, otherwise queue it
+        const waiter = waiters.shift();
 
-        console.log(
-            `[QUEUE] Added ${job.id} | ` +
-            `waiting=${scanQueue.length}/${MAX_QUEUE_SIZE}`
-        );
+        if (waiter) 
+        {
+            waiter(job);
+        } 
+        
+        else 
+        {
+            scanQueue.push(job);
+        }
     });
 }
 
-function sleep(ms) {
+function nextJob() 
+{
+    if (scanQueue.length > 0) 
+    {
+        return Promise.resolve(scanQueue.shift());
+    }
+
+    return new Promise(resolve => waiters.push(resolve));
+}
+
+function sleep(ms) 
+{
     return new Promise(resolve => setTimeout(resolve, ms));
 }
 
-// ============================================================
 // SAFE ARRAY PUSH
-// ============================================================
-
 function pushLimited(array, item, max) {
     if (array.length < max) {
         array.push(item);
     }
 }
 
-// ============================================================
+
 // URL HELPERS
-// ============================================================
-
-function getHostname(url) {
-    try {
+function getHostname(url) 
+{
+    try 
+    {
         return new URL(url).hostname.toLowerCase();
-    } catch {
+    } 
+    
+    catch 
+    {
         return "";
     }
 }
 
-function getOrigin(url) {
-    try {
+function getOrigin(url) 
+{
+    try 
+    {
         return new URL(url).origin;
-    } catch {
+    } 
+    
+    catch 
+    {
         return "";
     }
 }
 
-function isValidTargetUrl(url) {
-    try {
+function isValidTargetUrl(url) 
+{
+    try 
+    {
         const parsed = new URL(url);
 
         return (
             parsed.protocol === "http:" ||
             parsed.protocol === "https:"
         );
-    } catch {
+    } 
+    
+    catch 
+    {
         return false;
     }
 }
 
-function isPotentiallyExecutableFilename(filename) {
+function isPotentiallyExecutableFilename(filename) 
+{
     if (!filename) return false;
 
     const lower = filename.toLowerCase();
@@ -165,17 +188,13 @@ function isPotentiallyExecutableFilename(filename) {
     );
 }
 
-// ============================================================
-// BEHAVIORAL SCORING
-// ============================================================
-//
-// These are heuristic indicators, NOT proof that a website is
-// malicious.
-//
-// The host can combine this result with its other modules.
-// ============================================================
 
-function analyzeBehavior(telemetry) {
+// BEHAVIORAL SCORING
+// These are heuristic indicators, NOT proof that a website is malicious
+// The host can combine this result with its other modules.
+
+function analyzeBehavior(telemetry) 
+{
     let score = 0;
 
     const findings = [];
@@ -198,11 +217,10 @@ function analyzeBehavior(telemetry) {
         });
     }
 
-    // --------------------------------------------------------
+   
     // Downloads
-    // --------------------------------------------------------
-
-    if (telemetry.downloads.length > 0) {
+    if (telemetry.downloads.length > 0) 
+    {
         addFinding({
             type: "unexpected_download",
             severity: "high",
@@ -220,7 +238,8 @@ function analyzeBehavior(telemetry) {
                 )
             );
 
-        if (executableDownloads.length > 0) {
+        if (executableDownloads.length > 0) 
+        {
             addFinding({
                 type: "executable_download",
                 severity: "high",
@@ -233,10 +252,7 @@ function analyzeBehavior(telemetry) {
         }
     }
 
-    // --------------------------------------------------------
     // Hidden iframes
-    // --------------------------------------------------------
-
     if (telemetry.dom.hiddenIframeCount > 0) {
         const count = telemetry.dom.hiddenIframeCount;
 
@@ -248,41 +264,40 @@ function analyzeBehavior(telemetry) {
             points,
             details:
                 `${count} hidden iframe(s) detected.`,
-            evidence: {
+            evidence: 
+            {
                 hiddenIframeCount: count,
                 iframeCount: telemetry.dom.iframeCount
             }
         });
     }
 
-    // --------------------------------------------------------
     // Excessive iframe usage
-    // --------------------------------------------------------
-
-    if (telemetry.dom.iframeCount >= 10) {
+    if (telemetry.dom.iframeCount >= 10)
+    {
         addFinding({
             type: "excessive_iframes",
             severity: "medium",
             points: 8,
             details:
                 `${telemetry.dom.iframeCount} iframe(s) detected.`,
-            evidence: {
+            evidence: 
+            {
                 iframeCount: telemetry.dom.iframeCount
             }
         });
     }
 
-    // --------------------------------------------------------
-    // Redirect chain
-    // --------------------------------------------------------
 
+    // Redirect chain
     const redirectCount =
         Math.max(
             0,
             telemetry.navigation.redirects.length - 1
         );
 
-    if (redirectCount >= 3) {
+    if (redirectCount >= 3) 
+    {
         const points = Math.min(
             15,
             5 + (redirectCount - 3) * 2
@@ -300,10 +315,7 @@ function analyzeBehavior(telemetry) {
         });
     }
 
-    // --------------------------------------------------------
     // Popups / new tabs
-    // --------------------------------------------------------
-
     if (telemetry.popups.length > 0) {
         const count = telemetry.popups.length;
 
@@ -319,11 +331,10 @@ function analyzeBehavior(telemetry) {
         });
     }
 
-    // --------------------------------------------------------
+    
     // Excessive external scripts
-    // --------------------------------------------------------
-
-    if (telemetry.dom.externalScriptCount >= 20) {
+    if (telemetry.dom.externalScriptCount >= 20) 
+    {
         addFinding({
             type: "excessive_external_scripts",
             severity: "low",
@@ -331,18 +342,17 @@ function analyzeBehavior(telemetry) {
             details:
                 `${telemetry.dom.externalScriptCount} external ` +
                 "scripts detected.",
-            evidence: {
+            evidence: 
+            {
                 externalScriptCount:
                     telemetry.dom.externalScriptCount
             }
         });
     }
 
-    // --------------------------------------------------------
     // Large number of network requests
-    // --------------------------------------------------------
-
-    if (telemetry.requests.length >= 200) {
+    if (telemetry.requests.length >= 200)
+    {
         addFinding({
             type: "high_network_activity",
             severity: "low",
@@ -350,35 +360,33 @@ function analyzeBehavior(telemetry) {
             details:
                 `${telemetry.requests.length} network requests ` +
                 "observed during scanning.",
-            evidence: {
+            evidence: 
+            {
                 requestCount: telemetry.requests.length
             }
         });
     }
 
-    // --------------------------------------------------------
     // Password form
-    // --------------------------------------------------------
-
-    if (telemetry.dom.passwordFieldCount > 0) {
+    if (telemetry.dom.passwordFieldCount > 0) 
+    {
         addFinding({
             type: "password_form",
             severity: "low",
             points: 3,
             details:
                 "A password input was detected on the page.",
-            evidence: {
+            evidence: 
+            {
                 passwordFieldCount:
                     telemetry.dom.passwordFieldCount
             }
         });
     }
 
-    // --------------------------------------------------------
     // Dialog abuse
-    // --------------------------------------------------------
-
-    if (telemetry.dialogs.length >= 3) {
+    if (telemetry.dialogs.length >= 3)
+    {
         addFinding({
             type: "excessive_dialogs",
             severity: "medium",
@@ -390,11 +398,9 @@ function analyzeBehavior(telemetry) {
         });
     }
 
-    // --------------------------------------------------------
     // Browser notification requests
-    // --------------------------------------------------------
-
-    if (telemetry.permissions.notificationRequests > 0) {
+    if (telemetry.permissions.notificationRequests > 0) 
+    {
         addFinding({
             type: "notification_permission_request",
             severity: "low",
@@ -402,18 +408,18 @@ function analyzeBehavior(telemetry) {
             details:
                 "The page attempted to request browser " +
                 "notification permission.",
-            evidence: {
+            evidence: 
+            {
                 count:
                     telemetry.permissions.notificationRequests
             }
         });
     }
 
-    // --------------------------------------------------------
+    
     // Suspicious page text
-    // --------------------------------------------------------
-
-    if (telemetry.dom.suspiciousText.length > 0) {
+    if (telemetry.dom.suspiciousText.length > 0) 
+    {
         addFinding({
             type: "suspicious_security_text",
             severity: "medium",
@@ -425,19 +431,23 @@ function analyzeBehavior(telemetry) {
         });
     }
 
-    // --------------------------------------------------------
     // Final score
-    // --------------------------------------------------------
-
     score = Math.min(MAX_SCORE, score);
 
     let riskLevel;
 
-    if (score < 20) {
+    if (score < 20) 
+    {
         riskLevel = "low";
-    } else if (score < 50) {
+    } 
+    
+    else if (score < 50) 
+    {
         riskLevel = "suspicious";
-    } else if (score < 75) {
+    } 
+    
+    else if (score < 75) 
+    {
         riskLevel = "high";
     } else {
         riskLevel = "very_high";
@@ -451,14 +461,173 @@ function analyzeBehavior(telemetry) {
 }
 
 // ============================================================
+// BROWSER POOL
+// ============================================================
+//
+// One shared Chromium process, a fresh BrowserContext per scan.
+// A context has its own cookies, storage, cache, permissions and
+// service workers, and all telemetry lives in a per-scan object, so
+// two scans cannot write into each other's results.
+//
+// The only real shared risk is a browser crash, which would kill
+// every in-flight page. That is handled by:
+//   - detecting "disconnected" and launching a fresh browser
+//   - retrying a crashed scan once (see worker)
+//   - recycling the browser every RECYCLE_AFTER scans (leak control)
+//   - HARD_DEADLINE so one bad page cannot hold a slot forever
+
+const BROWSER_ARGS = [
+    "--disable-dev-shm-usage",
+    "--disable-gpu",
+    "--disable-software-rasterizer",
+    "--disable-extensions",
+    "--disable-background-networking",
+    "--disable-default-apps",
+    "--disable-sync",
+    "--no-first-run",
+    "--mute-audio",
+    "--js-flags=--max-old-space-size=192"   // cap each renderer's JS heap
+];
+
+// Needed when running as root inside a container.
+if (process.env.NO_SANDBOX === "1") 
+{
+    BROWSER_ARGS.push("--no-sandbox");
+}
+
+let current = null;
+
+function launchEntry() 
+{
+    const entry = {
+        active: 0,
+        used: 0,
+        retiring: false,
+        dead: false
+    };
+
+    entry.promise = chromium.launch({
+        headless: true,
+        args: BROWSER_ARGS
+    });
+
+    entry.promise
+        .then(browser => {
+            browser.on("disconnected", () => {
+                entry.dead = true;
+
+                if (current === entry) {
+                    current = null;
+                }
+            });
+        })
+        .catch(() => {
+            entry.dead = true;
+
+            if (current === entry) {
+                current = null;
+            }
+        });
+
+    return entry;
+}
+
+function maybeClose(entry) 
+{
+    if (entry.retiring && entry.active === 0) 
+    {
+        entry.promise
+            .then(browser => browser.close())
+            .catch(() => {});
+    }
+}
+
+async function acquireBrowser()
+{
+    let entry;
+
+    if (ISOLATION === "browser") 
+    {
+        entry = launchEntry();
+        entry.retiring = true;   // closed as soon as this scan is done
+    } 
+    
+    else 
+    {
+        if (
+            !current ||
+            current.dead ||
+            current.used >= RECYCLE_AFTER
+        ) {
+            const old = current;
+
+            current = launchEntry();
+
+            if (old) 
+            {
+                old.retiring = true;
+                maybeClose(old);
+            }
+        }
+
+        entry = current;
+    }
+
+    entry.used += 1;
+    entry.active += 1;
+
+    try 
+    {
+        const browser = await entry.promise;
+        return { entry, browser };
+    } 
+    
+    catch (error) 
+    {
+        entry.active -= 1;
+        throw error;
+    }
+}
+
+function releaseBrowser(entry) 
+{
+    entry.active -= 1;
+    maybeClose(entry);
+}
+
+// If the VM is nearly out of RAM, wait a moment instead of piling on
+// another page (which is how the Linux OOM killer ends up shooting Chromium).
+async function waitForMemory() 
+{
+    const start = Date.now();
+
+    while (
+        os.freemem() / 1048576 < MIN_FREE_MB &&
+        Date.now() - start < 3000
+    ) {
+        await sleep(200);
+    }
+}
+
+// Warm up so the first scan doesn't pay the launch cost.
+if (ISOLATION === "context") 
+{
+    current = launchEntry();
+}
+
+// ============================================================
 // PLAYWRIGHT SCANNER
 // ============================================================
 
-async function scanWithPlaywright(targetUrl, workerId, jobId) {
+async function scanWithPlaywright(targetUrl, workerId, jobId) 
+{
     const startTime = Date.now();
 
     let browser = null;
     let context = null;
+    let lease = null;
+    let killTimer = null;
+    let timedOut = false;
 
     const telemetry = {
         initialUrl: targetUrl,
@@ -508,16 +677,48 @@ async function scanWithPlaywright(targetUrl, workerId, jobId) {
             `Launching Chromium for ${targetUrl}`
         );
 
-        browser = await chromium.launch({
-            headless: true,
-            args: [
-                "--disable-dev-shm-usage"
-            ]
-        });
+        // Hard stop: closing the context makes every pending await throw,
+        // which frees the worker slot even if the page is stuck.
+        killTimer = setTimeout(() => {
+            timedOut = true;
+
+            if (context) {
+                context.close().catch(() => {});
+            }
+        }, HARD_DEADLINE);
+
+        await waitForMemory();
+
+        lease = await acquireBrowser();
+        browser = lease.browser;
+
+        if (timedOut) {
+            throw new Error("Scan exceeded hard deadline");
+        }
 
         context = await browser.newContext({
-            acceptDownloads: true
+            acceptDownloads: true,
+            ignoreHTTPSErrors: true,   // phishing sites often have broken certs
+            serviceWorkers: "block"
         });
+
+        // Don't download bytes the analysis never uses. Request events
+        // still fire, so request counts in the telemetry are unchanged.
+        if (BLOCK_HEAVY) {
+            await context.route("**/*", route => {
+                const type = route.request().resourceType();
+
+                if (
+                    type === "image" ||
+                    type === "media" ||
+                    type === "font"
+                ) {
+                    return route.abort();
+                }
+
+                return route.continue();
+            });
+        }
 
         const page = await context.newPage();
 
@@ -740,6 +941,15 @@ async function scanWithPlaywright(targetUrl, workerId, jobId) {
                 timeout: NAVIGATION_TIMEOUT
             });
         } catch (error) {
+            // Chromium died (not a normal slow/failed page): abort this
+            // attempt so the worker can retry once on a fresh browser.
+            if (
+                !timedOut &&
+                /has been closed|disconnected|crash/i.test(error.message)
+            ) {
+                throw error;
+            }
+
             telemetry.errors.push({
                 stage: "navigation",
                 message: error.message
@@ -750,7 +960,22 @@ async function scanWithPlaywright(targetUrl, workerId, jobId) {
         // BOUNDED OBSERVATION PERIOD
         // ====================================================
 
-        await page.waitForTimeout(OBSERVATION_TIME);
+        // Wait for the page to go quiet (up to OBSERVATION_TIME), but always
+        // watch for at least MIN_OBSERVATION so redirect / popup / download
+        // timers get a chance to fire.
+        const observeStart = Date.now();
+
+        await page
+            .waitForLoadState("networkidle", {
+                timeout: OBSERVATION_TIME
+            })
+            .catch(() => {});
+
+        const spent = Date.now() - observeStart;
+
+        if (spent < MIN_OBSERVATION) {
+            await page.waitForTimeout(MIN_OBSERVATION - spent);
+        }
 
         // ====================================================
         // DOM ANALYSIS
@@ -951,6 +1176,14 @@ async function scanWithPlaywright(targetUrl, workerId, jobId) {
             statistics:
                 telemetry.statistics,
 
+            // Lets the host tell "looked clean" from "never finished loading".
+            navigationError:
+                (telemetry.errors.find(
+                    e => e.stage === "navigation"
+                ) || {}).message || null,
+
+            timedOut,
+
             telemetry
         };
 
@@ -969,7 +1202,16 @@ async function scanWithPlaywright(targetUrl, workerId, jobId) {
 
             findings: [],
 
-            error: error.message,
+            error: timedOut
+                ? "Scan exceeded hard deadline"
+                : error.message,
+
+            timedOut,
+
+            // browser died under us (not our own timeout) -> worth one retry
+            retryable:
+                !timedOut &&
+                /closed|disconnected|crash/i.test(error.message),
 
             telemetry
         };
@@ -979,21 +1221,17 @@ async function scanWithPlaywright(targetUrl, workerId, jobId) {
         // ALWAYS CLEAN UP
         // ====================================================
 
+        clearTimeout(killTimer);
+
         try {
             if (context) {
                 await context.close();
             }
         } catch {}
 
-        try {
-            if (browser) {
-                await browser.close();
-            }
-        } catch {}
-
-        console.log(
-            `[WORKER ${workerId}] [${jobId}] Chromium closed`
-        );
+        if (lease) {
+            releaseBrowser(lease.entry);
+        }
     }
 }
 
@@ -1005,16 +1243,7 @@ async function worker(workerId) {
     console.log(`[WORKER ${workerId}] Started`);
 
     while (true) {
-        if (scanQueue.length === 0) {
-            await sleep(50);
-            continue;
-        }
-
-        const job = scanQueue.shift();
-
-        if (!job) {
-            continue;
-        }
+        const job = await nextJob();
 
         console.log(
             `[WORKER ${workerId}] ` +
@@ -1023,11 +1252,26 @@ async function worker(workerId) {
         );
 
         try {
-            const result = await scanWithPlaywright(
+            let result = await scanWithPlaywright(
                 job.targetUrl,
                 workerId,
                 job.id
             );
+
+            // If Chromium itself crashed mid-scan, retry ONCE on a fresh
+            // browser instead of returning wrong/empty data.
+            if (!result.success && result.retryable) {
+                console.warn(
+                    `[WORKER ${workerId}] [${job.id}] ` +
+                    "Browser crashed, retrying once"
+                );
+
+                result = await scanWithPlaywright(
+                    job.targetUrl,
+                    workerId,
+                    job.id
+                );
+            }
 
             job.resolve(result);
         } catch (error) {
@@ -1116,10 +1360,13 @@ app.post("/scan", async (req, res) => {
 
         const result = await enqueue(targetUrl);
 
+        // Full telemetry is large. Send it only on request (?full=1).
+        const { telemetry, ...slim } = result;
+
         return res.json({
             status: "completed",
             target: targetUrl,
-            result
+            result: req.query.full === "1" ? result : slim
         });
 
     } catch (error) {
@@ -1145,7 +1392,21 @@ app.get("/status", (req, res) => {
         },
 
         workers: {
-            count: WORKER_COUNT
+            count: WORKER_COUNT,
+            idle: waiters.length
+        },
+
+        browser: {
+            isolation: ISOLATION,
+            scansOnCurrentBrowser: current ? current.used : 0,
+            recycleAfter: RECYCLE_AFTER
+        },
+
+        memory: {
+            vmFreeMB: Math.round(os.freemem() / 1048576),
+            nodeRssMB: Math.round(
+                process.memoryUsage().rss / 1048576
+            )
         },
 
         configuration: {
@@ -1191,7 +1452,9 @@ app.listen(PORT, "0.0.0.0", () => {
     console.log(`Workers          : ${WORKER_COUNT}`);
     console.log(`Queue capacity   : ${MAX_QUEUE_SIZE}`);
     console.log(`Navigation limit : ${NAVIGATION_TIMEOUT} ms`);
-    console.log(`Observation      : ${OBSERVATION_TIME} ms`);
+    console.log(`Observation      : ${OBSERVATION_TIME} ms (min ${MIN_OBSERVATION})`);
+    console.log(`Hard deadline    : ${HARD_DEADLINE} ms`);
+    console.log(`Isolation        : ${ISOLATION}`);
     console.log("==============================================");
     console.log("[VM] Server ready");
 });
