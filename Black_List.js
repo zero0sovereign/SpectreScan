@@ -20,7 +20,13 @@ async function syncDatabase()
             const u = line.trim().toLowerCase();
             if (!u) continue;
             urls.add(u);
-            try { hosts.add(new URL(u).hostname); } catch { /* skip malformed line */ }
+            
+            try 
+            { 
+                hosts.add(new URL(u).hostname); 
+            } 
+            
+            catch { /* skip malformed line */ }
         }
 
         // swap atomically; on failure we keep serving the old data
@@ -40,22 +46,28 @@ syncDatabase();
 setInterval(syncDatabase, 60 * 60 * 1000).unref();
 
 // Synchronous on purpose: it's just Set lookups.
-function blacklistCheck(targetUrl) {
+function blacklistCheck(targetUrl) 
+{
     const target = targetUrl.trim().toLowerCase();
 
     const exact = urlSet.has(target);
 
     let domain = false;
-    if (!exact) {
-        try { domain = hostSet.has(new URL(target).hostname); } catch { /* ignore */ }
+   
+    if (!exact) 
+    {
+        try 
+        { 
+            domain = hostSet.has(new URL(target).hostname); 
+        } 
+        
+        catch { /* ignore */ }
     }
 
-    return {
+    return 
+    {
         safe: !(exact || domain),
         isPhishing: exact || domain,
-        // A hostname-only hit can be a false positive on shared hosts
-        // (sites.google.com, github.io, ...), so server.js treats it as
-        // "suspicious", not "malicious".
         matchType: exact ? 'Exact URL' : (domain ? 'Domain Match' : 'None'),
         database: 'OpenPhish Public Feed',
         totalUrlsLoaded: urlSet.size,
@@ -64,3 +76,6 @@ function blacklistCheck(targetUrl) {
 }
 
 module.exports = blacklistCheck;
+        // A hostname-only hit can be a false positive on shared hosts
+        // (sites.google.com, github.io, ...), so server.js treats it as
+        // "suspicious", not "malicious".
