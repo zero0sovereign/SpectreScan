@@ -38,3 +38,54 @@ button:focus-visible
 {
     box-shadow: 0 0 8px #09b51d;
 }
+
+/* ---------- Live terminal output ---------- */
+
+body {
+    transition: margin-top 0.4s ease;
+}
+
+/* after the first scan the form slides up to make room for output */
+body.active {
+    margin-top: 40px;
+}
+
+button:disabled {
+    opacity: 0.4;
+    cursor: not-allowed !important;
+}
+
+#terminal {
+    width: min(920px, 92vw);
+    margin: 30px auto 60px;
+    font-size: 15px;
+    line-height: 1.5;
+    text-align: left;
+}
+
+#terminal .line {
+    white-space: pre-wrap;
+    word-break: break-all;
+}
+
+#terminal .tag { margin-right: 8px; }
+
+#terminal .info { color: #3aa6ff; }   /* [*] */
+#terminal .good { color: #09b51d; }   /* [+] */
+#terminal .warn { color: #e6b422; }   /* [!] */
+#terminal .bad  { color: #ff4d4d; }   /* [-] */
+#terminal .dim  { color: #5c7a5f; }
+#terminal .prompt { color: #09b51d; margin-top: 18px; }
+#terminal .verdict { font-weight: bold; margin-top: 8px; }
+
+/* ---------- Stacked scans: newest on top, older ones underneath ---------- */
+
+#terminal .scan-block {
+    padding-bottom: 14px;
+    margin-bottom: 18px;
+    border-bottom: 1px dashed #1c4a22;
+}
+
+#terminal .scan-block .prompt {
+    margin-top: 0;
+}
