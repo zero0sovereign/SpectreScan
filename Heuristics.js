@@ -77,8 +77,6 @@ async function heuristicsCheck(cleanUrl)
             warnings.push('Contains double encoding or directory traversal sequences');
         }
 
-        // --- NEW ADDED RULES ---
-
         // 10. Non-standard / suspicious port check
         if (parsedUrl.port && !['80', '443', '8080', '8443'].includes(parsedUrl.port)) 
         {
@@ -101,20 +99,45 @@ async function heuristicsCheck(cleanUrl)
             warnings.push('Excessive directory nesting in URL path');
         }
 
-        // 13. High-entropy or random uppercase path segment check (e.g. 73321ALNWYY)
+        // 13. Suspicious nested structure: first directory after TLD is a random string followed by more paths
         const pathSegments = parsedUrl.pathname.split('/').filter(Boolean);
-        const hasRandomLookingSegment = pathSegments.some(segment => 
-            segment.length > 8 && /[A-Z]/.test(segment) && /\d/.test(segment)
-        );
-        if (hasRandomLookingSegment) 
+        
+        if (pathSegments.length >= 2) 
         {
-            riskScore += 30;
-            warnings.push('Contains suspicious alphanumeric/randomized path segment');
+            const firstSegment = pathSegments[0];
+            
+            // Check if the first segment looks like a random token/hash (alphanumeric or long number)
+            const isFirstSegmentRandom = (
+                (firstSegment.length > 6 && /[a-z]/i.test(firstSegment) && /\d/.test(firstSegment)) ||
+                (firstSegment.length > 8 && /^\d+$/.test(firstSegment))
+            );
+
+            if (isFirstSegmentRandom) 
+            {
+                riskScore += 35;
+                warnings.push('URL starts with a random/obfuscated directory followed by nested paths');
+            }
+        }
+
+        // 14. Long random string inside subdomain label
+        if (subdomains.some(sub => sub.length > 15 && /\d/.test(sub))) 
+        {
+            riskScore += 35;
+            warnings.push('Contains an unusually long, randomized subdomain label');
+        }
+
+        // 15. Catch uncommon/suspicious custom TLD length or format
+        const tld = '.' + subdomains[subdomains.length - 1];
+        if (tld.length > 6 && !['.com', '.org', '.net', '.edu', '.gov'].includes(tld))
+        {
+            riskScore += 20;
+            warnings.push('Uses an uncommon or unusually long TLD suffix');
         }
 
         // -----------------------
 
-        return {
+        return 
+        {
             working: true,
             url: cleanUrl,
             riskScore,
@@ -125,7 +148,8 @@ async function heuristicsCheck(cleanUrl)
     
     catch (error) 
     {
-        return {
+        return 
+        {
             working: true,
             url: cleanUrl,
             error: 'Failed to run heuristics check.'
