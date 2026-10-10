@@ -1,109 +1,66 @@
-const https = require('https');
+const FEED_URL = 'https://raw.githubusercontent.com/openphish/public_feed/refs/heads/main/feed.txt';
 
-// Unified Set for fast O(1) in-memory checks
-let openphishUrls = new Set();
-let urlhausUrls = new Set();
+let urlSet = new Set();
+let hostSet = new Set();
 let lastUpdated = null;
 
-const OPENPHISH_FEED = 'https://raw.githubusercontent.com/openphish/public_feed/refs/heads/main/feed.txt';
-const URLHAUS_FEED = 'https://urlhaus.abuse.ch/downloads/text/';
+async function syncDatabase() 
+{
+    try 
+    {
+        const res = await fetch(FEED_URL, { signal: AbortSignal.timeout(30_000) });
+        if (!res.ok) throw new Error(`status ${res.status}`);
 
-// Generic fetcher for text-based feeds
-function fetchFeed(feedUrl) {
-    return new Promise((resolve) => {
-        https.get(feedUrl, (res) => {
-            // URLhaus might redirect (301/302)
-            if (res.statusCode >= 300 && res.statusCode < 400 && res.headers.location) {
-                return resolve(fetchFeed(res.headers.location));
-            }
+        const text = await res.text();
+        const urls = new Set();
+        const hosts = new Set();
 
-            if (res.statusCode !== 200) {
-                console.error(`[Feed Error] Status ${res.statusCode} for ${feedUrl}`);
-                return resolve(new Set());
-            }
-
-            let rawData = '';
-            res.on('data', (chunk) => { rawData += chunk; });
-            res.on('end', () => {
-                const lines = rawData
-                    .split(/\r?\n/)
-                    // Remove blank lines and URLhaus comment lines starting with '#'
-                    .filter(line => line.trim().length > 0 && !line.trim().startsWith('#'))
-                    .map(url => url.trim().toLowerCase());
-
-                resolve(new Set(lines));
-            });
-        }).on('error', (err) => {
-            console.error(`[Network Error] Failed fetching ${feedUrl}:`, err.message);
-            resolve(new Set());
-        });
-    });
-}
-
-// Downloads both feeds and saves them in memory
-async function syncAllDatabases() {
-    console.log('[Threat Intel] Syncing threat databases...');
-    const [phishSet, hausSet] = await Promise.all([
-        fetchFeed(OPENPHISH_FEED),
-        fetchFeed(URLHAUS_FEED)
-    ]);
-
-    if (phishSet.size > 0) openphishUrls = phishSet;
-    if (hausSet.size > 0) urlhausUrls = hausSet;
-    lastUpdated = new Date();
-
-    console.log(`[Database Ready] OpenPhish: ${openphishUrls.size} URLs | URLhaus: ${urlhausUrls.size} URLs.`);
-}
-
-// Initial pull on server boot
-syncAllDatabases();
-
-// Re-sync feeds every 1 hour
-setInterval(syncAllDatabases, 60 * 60 * 1000);
-
-// Detection helper for matching either exact URL or hostname
-function checkMatch(targetUrl, databaseSet) {
-    const isExact = databaseSet.has(targetUrl);
-    if (isExact) return { matched: true, matchType: 'Exact URL' };
-
-    try {
-        const targetHost = new URL(targetUrl).hostname;
-        for (const badUrl of databaseSet) {
-            try {
-                if (new URL(badUrl).hostname === targetHost) {
-                    return { matched: true, matchType: 'Domain / Hostname Match' };
-                }
-            } catch {
-                // Ignore malformed entries
-            }
+        for (const line of text.split(/\r?\n/)) 
+        {
+            const u = line.trim().toLowerCase();
+            if (!u) continue;
+            urls.add(u);
+            try { hosts.add(new URL(u).hostname); } catch { /* skip malformed line */ }
         }
-    } catch {
-        // Bad target URL format
+
+        // swap atomically; on failure we keep serving the old data
+        urlSet = urls;
+        hostSet = hosts;
+        lastUpdated = new Date();
+        console.log(`[Blacklist] Loaded ${urls.size} URLs / ${hosts.size} hosts`);
+    } 
+    
+    catch (err) 
+    {
+        console.error('[Blacklist] Feed sync failed:', err.message);
+    }
+}
+
+syncDatabase();
+setInterval(syncDatabase, 60 * 60 * 1000).unref();
+
+// Synchronous on purpose: it's just Set lookups.
+function blacklistCheck(targetUrl) {
+    const target = targetUrl.trim().toLowerCase();
+
+    const exact = urlSet.has(target);
+
+    let domain = false;
+    if (!exact) {
+        try { domain = hostSet.has(new URL(target).hostname); } catch { /* ignore */ }
     }
 
-    return { matched: false, matchType: 'None' };
-}
-
-// Main checking function used by server.js
-module.exports = async function checkBlacklist(targetUrl) {
-    const cleanTarget = targetUrl.trim().toLowerCase();
-
-    const phishCheck = checkMatch(cleanTarget, openphishUrls);
-    const hausCheck = checkMatch(cleanTarget, urlhausUrls);
-
-    const isFlagged = phishCheck.matched || hausCheck.matched;
-
-    // Detect which feeds identified the threat
-    const sourcesFound = [];
-    if (phishCheck.matched) sourcesFound.push('OpenPhish (Phishing)');
-    if (hausCheck.matched) sourcesFound.push('URLhaus (Malware)');
-
     return {
-        safe: !isFlagged,
-        isMalicious: isFlagged,
-        matchedFeeds: sourcesFound.length > 0 ? sourcesFound : ['None'],
-        matchType: phishCheck.matchType !== 'None' ? phishCheck.matchType : hausCheck.matchType,
-        totalThreatUrls: openphishUrls.size + urlhausUrls.size,
+        safe: !(exact || domain),
+        isPhishing: exact || domain,
+        // A hostname-only hit can be a false positive on shared hosts
+        // (sites.google.com, github.io, ...), so server.js treats it as
+        // "suspicious", not "malicious".
+        matchType: exact ? 'Exact URL' : (domain ? 'Domain Match' : 'None'),
+        database: 'OpenPhish Public Feed',
+        totalUrlsLoaded: urlSet.size,
         lastSynced: lastUpdated
     };
-};
+}
+
+module.exports = blacklistCheck;
