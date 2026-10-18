@@ -671,7 +671,8 @@ async function scanWithPlaywright(targetUrl, workerId, jobId)
         timing: {}
     };
 
-    try {
+    try 
+    {
         console.log(
             `[WORKER ${workerId}] [${jobId}] ` +
             `Launching Chromium for ${targetUrl}`
@@ -692,7 +693,8 @@ async function scanWithPlaywright(targetUrl, workerId, jobId)
         lease = await acquireBrowser();
         browser = lease.browser;
 
-        if (timedOut) {
+        if (timedOut) 
+        {
             throw new Error("Scan exceeded hard deadline");
         }
 
@@ -704,7 +706,8 @@ async function scanWithPlaywright(targetUrl, workerId, jobId)
 
         // Don't download bytes the analysis never uses. Request events
         // still fire, so request counts in the telemetry are unchanged.
-        if (BLOCK_HEAVY) {
+        if (BLOCK_HEAVY) 
+        {
             await context.route("**/*", route => {
                 const type = route.request().resourceType();
 
@@ -773,7 +776,8 @@ async function scanWithPlaywright(targetUrl, workerId, jobId)
 
             if (!url) return;
 
-            if (frame === page.mainFrame()) {
+            if (frame === page.mainFrame()) 
+            {
                 telemetry.navigation.redirects.push(url);
 
                 pushLimited(
@@ -784,7 +788,10 @@ async function scanWithPlaywright(targetUrl, workerId, jobId)
                     },
                     MAX_REDIRECTS
                 );
-            } else {
+            } 
+            
+            else 
+            {
                 pushLimited(
                     telemetry.frames,
                     {
@@ -911,9 +918,11 @@ async function scanWithPlaywright(targetUrl, workerId, jobId)
             );
 
             // Dismiss dialogs so they cannot block the worker.
-            try {
+            try 
+            {
                 await dialog.dismiss();
-            } catch {}
+            } 
+            catch {}
         });
 
         // ====================================================
@@ -935,12 +944,16 @@ async function scanWithPlaywright(targetUrl, workerId, jobId)
         // NAVIGATE
         // ====================================================
 
-        try {
+        try 
+        {
             await page.goto(targetUrl, {
                 waitUntil: "domcontentloaded",
                 timeout: NAVIGATION_TIMEOUT
             });
-        } catch (error) {
+        } 
+        
+        catch (error) 
+        {
             // Chromium died (not a normal slow/failed page): abort this
             // attempt so the worker can retry once on a fresh browser.
             if (
@@ -973,7 +986,8 @@ async function scanWithPlaywright(targetUrl, workerId, jobId)
 
         const spent = Date.now() - observeStart;
 
-        if (spent < MIN_OBSERVATION) {
+        if (spent < MIN_OBSERVATION) 
+        {
             await page.waitForTimeout(MIN_OBSERVATION - spent);
         }
 
@@ -981,7 +995,8 @@ async function scanWithPlaywright(targetUrl, workerId, jobId)
         // DOM ANALYSIS
         // ====================================================
 
-        try {
+        try 
+        {
             telemetry.dom = await page.evaluate(() => {
                 const all =
                     Array.from(
@@ -1003,7 +1018,8 @@ async function scanWithPlaywright(targetUrl, workerId, jobId)
                         document.querySelectorAll("form")
                     );
 
-                function isHidden(element) {
+                function isHidden(element) 
+                {
                     const style =
                         window.getComputedStyle(element);
 
@@ -1022,14 +1038,18 @@ async function scanWithPlaywright(targetUrl, workerId, jobId)
                 let hiddenIframeCount = 0;
                 let hiddenElementCount = 0;
 
-                for (const iframe of iframes) {
-                    if (isHidden(iframe)) {
+                for (const iframe of iframes) 
+                {
+                    if (isHidden(iframe)) 
+                    {
                         hiddenIframeCount++;
                     }
                 }
 
-                for (const element of all) {
-                    if (isHidden(element)) {
+                for (const element of all) 
+                {
+                    if (isHidden(element)) 
+                    {
                         hiddenElementCount++;
                     }
                 }
@@ -1081,7 +1101,10 @@ async function scanWithPlaywright(targetUrl, workerId, jobId)
                     suspiciousText
                 };
             });
-        } catch (error) {
+        } 
+        
+        catch (error) 
+        {
             telemetry.errors.push({
                 stage: "dom-analysis",
                 message: error.message
@@ -1092,7 +1115,8 @@ async function scanWithPlaywright(targetUrl, workerId, jobId)
         // NOTIFICATION PERMISSION CHECK
         // ====================================================
 
-        try {
+        try 
+        {
             telemetry.permissions =
                 await page.evaluate(() => {
                     let notificationRequests = 0;
@@ -1113,7 +1137,10 @@ async function scanWithPlaywright(targetUrl, workerId, jobId)
                                 : "unavailable"
                     };
                 });
-        } catch {
+        } 
+        
+        catch 
+        {
             telemetry.permissions = {
                 notificationRequests: 0
             };
@@ -1187,7 +1214,10 @@ async function scanWithPlaywright(targetUrl, workerId, jobId)
             telemetry
         };
 
-    } catch (error) {
+    } 
+    
+    catch (error) 
+    {
         return {
             success: false,
 
@@ -1216,18 +1246,24 @@ async function scanWithPlaywright(targetUrl, workerId, jobId)
             telemetry
         };
 
-    } finally {
+    } 
+    
+    finally 
+    {
         // ====================================================
         // ALWAYS CLEAN UP
         // ====================================================
 
         clearTimeout(killTimer);
 
-        try {
+        try 
+        {
             if (context) {
                 await context.close();
             }
-        } catch {}
+        } 
+        
+        catch {}
 
         if (lease) {
             releaseBrowser(lease.entry);
@@ -1239,10 +1275,12 @@ async function scanWithPlaywright(targetUrl, workerId, jobId)
 // WORKER
 // ============================================================
 
-async function worker(workerId) {
+async function worker(workerId) 
+{
     console.log(`[WORKER ${workerId}] Started`);
 
-    while (true) {
+    while (true) 
+    {
         const job = await nextJob();
 
         console.log(
@@ -1251,7 +1289,8 @@ async function worker(workerId) {
             `remaining=${scanQueue.length}`
         );
 
-        try {
+        try 
+        {
             let result = await scanWithPlaywright(
                 job.targetUrl,
                 workerId,
@@ -1260,7 +1299,8 @@ async function worker(workerId) {
 
             // If Chromium itself crashed mid-scan, retry ONCE on a fresh
             // browser instead of returning wrong/empty data.
-            if (!result.success && result.retryable) {
+            if (!result.success && result.retryable) 
+            {
                 console.warn(
                     `[WORKER ${workerId}] [${job.id}] ` +
                     "Browser crashed, retrying once"
@@ -1274,7 +1314,10 @@ async function worker(workerId) {
             }
 
             job.resolve(result);
-        } catch (error) {
+        } 
+        
+        catch (error) 
+        {
             job.resolve({
                 success: false,
                 jobId: job.id,
@@ -1292,7 +1335,8 @@ async function worker(workerId) {
 // START WORKERS
 // ============================================================
 
-function startWorkers() {
+function startWorkers() 
+{
     for (let i = 1; i <= WORKER_COUNT; i++) {
         worker(i).catch(error => {
             console.error(
@@ -1336,7 +1380,8 @@ app.post("/scan", async (req, res) => {
     // Backpressure
     // --------------------------------------------------------
 
-    if (scanQueue.length >= MAX_QUEUE_SIZE) {
+    if (scanQueue.length >= MAX_QUEUE_SIZE) 
+    {
         console.warn(
             `[QUEUE] FULL - rejected ${targetUrl}`
         );
@@ -1353,7 +1398,8 @@ app.post("/scan", async (req, res) => {
     // Queue job
     // --------------------------------------------------------
 
-    try {
+    try 
+    {
         console.log(
             `[API] Queuing scan: ${targetUrl}`
         );
@@ -1369,7 +1415,10 @@ app.post("/scan", async (req, res) => {
             result: req.query.full === "1" ? result : slim
         });
 
-    } catch (error) {
+    } 
+    
+    catch (error) 
+    {
         return res.status(503).json({
             status: "error",
             target: targetUrl,
